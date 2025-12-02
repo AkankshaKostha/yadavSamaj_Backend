@@ -1,351 +1,173 @@
+import { Component, OnInit } from '@angular/core';
+import { HomeSectionService } from '../../../core/home-section';
+import { FormBuilder, FormsModule } from '@angular/forms';
+import { CommonModule } from '@angular/common';
+import { HomeSection } from '../../../core/models';
+import { HttpClient } from '@angular/common/http';
+import Swal from 'sweetalert2';
 
-package com.example.yadavsamaj.controller;
+interface FilePreview {
+  file: File;
+  preview: string;
+}
 
-import com.example.yadavsamaj.model.HomeSection;
-import com.example.yadavsamaj.repository.HomeSectionRepository;
-import com.example.yadavsamaj.service.HomeSectionService;
+@Component({
+  selector: 'app-home-sections-admin',
+  standalone: true,
+  imports: [CommonModule, FormsModule],
+  templateUrl: './home-sections.html',
+  styleUrls: ['./home-sections.scss']
+})
+export class HomeSectionsComponent implements OnInit {
+  sections: HomeSection[] = [];
+  imageBaseUrl = 'http://yaduvanshisangathan.cloud';
 
-import lombok.RequiredArgsConstructor;
+  // For adding multiple banners
+  multipleFiles: FilePreview[] = [];
+  newBannerTitle = '';
+  newBannerDescription = '';
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.*;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
+  // For adding a single card
+  newCardTitle = '';
+  newCardDescription = '';
+  newCardFile?: File;
+  newCardFilePreview?: string;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
+  constructor(private service: HomeSectionService, private http: HttpClient, private fb: FormBuilder) {}
 
-@RestController
-@RequestMapping("/api/home-sections")
-@RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:4200")
-public class HomeSectionController {
+  ngOnInit(): void {
+    this.loadSections();
+  }
 
-    private final HomeSectionService service;
+  loadSections() {
+    this.service.getSections().subscribe({
+      next: (data) => {
+        this.sections = data.map(s => ({
+          ...s,
+          imageUrl: s.imageUrl ? this.getImageUrl(s.imageUrl) : '',
+          imageUrls: s.imageUrls ? s.imageUrls.map(img => this.getImageUrl(img)) : []
+        }));
+      },
+      error: (err) => console.error(err)
+    });
+  }
 
-    private static final String UPLOAD_DIR = "/var/www/angular/uploads/home-sections/";
-    @Autowired
-    private HomeSectionRepository homeSectionRepository;
+  getImageUrl(path: string): string {
+    return path.startsWith('http') ? path : `${this.imageBaseUrl}${path}`;
+  }
 
-    // -------------------- GET --------------------
+  // Single file for updating existing banner
+  onFileChange(event: any, section: HomeSection) {
+    const file = event.target.files[0];
+    if (file) (section as any).newImage = file;
+  }
 
-    @GetMapping
-    public ResponseEntity<List<HomeSection>> getAll() {
-        return ResponseEntity.ok(service.getAll());
+  // Multiple file upload for new banners
+  onMultipleFilesChange(event: any) {
+    const files: FileList = event.target.files;
+    this.multipleFiles = [];
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (e: any) => {
+        this.multipleFiles.push({ file, preview: e.target.result });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  removeFile(f: FilePreview) {
+    this.multipleFiles = this.multipleFiles.filter(x => x !== f);
+  }
+
+  addMultipleBanners() {
+    if (!this.multipleFiles.length) {
+      Swal.fire({ icon: 'warning', title: 'No Images Selected', text: 'Please select at least one image.' });
+      return;
+    }
+    if (this.newBannerTitle.trim() === '') {
+      Swal.fire({ icon: 'warning', title: 'Title Required', text: 'Please enter a title for the banner.' });
+      return;
     }
 
-    @GetMapping("/type/{type}")
-    public ResponseEntity<?> getByType(@PathVariable String type) {
-        try {
-            HomeSection.SectionType sectionType = HomeSection.SectionType.valueOf(type.toUpperCase());
-            return ResponseEntity.ok(service.getByType(sectionType));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Invalid section type: " + type));
-        }
+    this.multipleFiles.forEach(f => {
+      const formData = new FormData();
+      formData.append('type', 'BANNER');
+      formData.append('title', this.newBannerTitle);
+      if (this.newBannerDescription.trim() !== '') formData.append('description', this.newBannerDescription);
+      formData.append('image', f.file);
+
+      this.service.addSection(formData).subscribe({
+        next: () => this.loadSections(),
+        error: err => console.error(err)
+      });
+    });
+
+    this.multipleFiles = [];
+    this.newBannerTitle = '';
+    this.newBannerDescription = '';
+
+    Swal.fire({ icon: 'success', title: 'Banners Added!', text: 'Your banners have been successfully added.' });
+  }
+
+  // Add new card
+  onCardFileChange(event: any) {
+    const file = event.target.files[0];
+    if (file) {
+      this.newCardFile = file;
+      const reader = new FileReader();
+      reader.onload = (e: any) => this.newCardFilePreview = e.target.result;
+      reader.readAsDataURL(file);
+    }
+  }
+
+  addNewCard() {
+    if (!this.newCardTitle.trim()) {
+      Swal.fire({ icon: 'warning', title: 'Title Required', text: 'Please enter a title for the card.' });
+      return;
+    }
+    if (!this.newCardFile) {
+      Swal.fire({ icon: 'warning', title: 'Image Required', text: 'Please select an image for the card.' });
+      return;
     }
 
-    @GetMapping("/active/type/{type}")
-    public ResponseEntity<List<HomeSection>> getActiveByType(@PathVariable String type) {
-        try {
-            HomeSection.SectionType sectionType = HomeSection.SectionType.valueOf(type.toUpperCase());
-            return ResponseEntity.ok(service.getActiveByType(sectionType));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Collections.emptyList());
-        }
+    const formData = new FormData();
+    formData.append('type', 'CARD');
+    formData.append('title', this.newCardTitle);
+    if (this.newCardDescription.trim() !== '') formData.append('description', this.newCardDescription);
+    formData.append('image', this.newCardFile);
+
+    this.service.addSection(formData).subscribe({
+      next: () => {
+        this.loadSections();
+        this.newCardTitle = '';
+        this.newCardDescription = '';
+        this.newCardFile = undefined;
+        this.newCardFilePreview = undefined;
+        Swal.fire({ icon: 'success', title: 'Card Added!', text: 'Your new card has been successfully added.' });
+      },
+      error: err => console.error(err)
+    });
+  }
+
+  updateHomeSection(section: HomeSection) {
+    const formData = new FormData();
+    if (section.description) formData.append('description', section.description);
+    if ((section as any).newImage) formData.append('file', (section as any).newImage);
+    if (section.route) formData.append('route', section.route);
+
+    this.service.updateSection(section.id, formData).subscribe({
+      next: () => {
+        alert('Section updated successfully!');
+        this.loadSections();
+        delete (section as any).newImage;
+      },
+      error: (err) => { console.error(err); alert('Failed to update section.'); }
+    });
+  }
+
+  deleteSection(id: number) {
+    if (confirm('Delete this section?')) {
+      this.service.deleteSection(id).subscribe(() => this.loadSections());
     }
-
-    // -------------------- ADD --------------------
-
-    @PostMapping(value = "/add", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<?> addSection(
-            @RequestPart("title") String title,
-            @RequestPart(value = "description", required = false) String description,
-            @RequestPart(value = "route", required = false) String route,
-            @RequestPart("type") String type,
-            @RequestPart(value = "image", required = false) MultipartFile[] images // ✅ array
-    ) {
-        try {
-            File uploadDir = new File(UPLOAD_DIR);
-            if (!uploadDir.exists()) uploadDir.mkdirs();
-
-            HomeSection.SectionType sectionType;
-            try {
-                sectionType = HomeSection.SectionType.valueOf(type.toUpperCase());
-            } catch (IllegalArgumentException ex) {
-                return ResponseEntity.badRequest().body(Map.of("message", "Invalid section type: " + type));
-            }
-
-            List<String> imageUrls = new ArrayList<>();
-            if (images != null) {
-                for (MultipartFile image : images) {
-                    if (!image.isEmpty()) {
-                        String fileName = System.currentTimeMillis() + "_" + image.getOriginalFilename();
-                        File dest = new File(uploadDir, fileName);
-                        image.transferTo(dest);
-                        imageUrls.add("/uploads/home-sections/" + fileName);
-                    }
-                }
-            }
-
-            HomeSection section = new HomeSection();
-            section.setTitle(title);
-            section.setDescription(description);
-            section.setRoute(route);
-            section.setType(sectionType);
-            section.setImageUrl(imageUrls.isEmpty() ? null : imageUrls.get(0)); // store first for compatibility
-            section.setActive(true);
-
-            HomeSection saved = service.save(section);
-            return ResponseEntity.ok(Map.of("success", true, "data", saved));
-        } catch (IOException e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Upload failed", "error", e.getMessage()));
-        }
-    }
-    @PostMapping(value = "/photos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<?> addPhotos(@RequestPart("files") List<MultipartFile> files) {
-        List<HomeSection> savedSections = new ArrayList<>();
-        try {
-            File uploadDir = new File(UPLOAD_DIR);
-            if (!uploadDir.exists()) uploadDir.mkdirs();
-
-            for (MultipartFile image : files) {
-                if (image != null && !image.isEmpty()) {
-                    String fileName = System.currentTimeMillis() + "_" + image.getOriginalFilename();
-                    File dest = new File(uploadDir, fileName);
-                    image.transferTo(dest);
-
-                    HomeSection section = new HomeSection();
-                    section.setType(HomeSection.SectionType.MEMBERSHIP_PHOTO);
-                    section.setImageUrl("/uploads/home-sections/" + fileName);
-                    section.setActive(true);
-
-                    savedSections.add(service.save(section));
-                }
-            }
-            return ResponseEntity.ok(Map.of("success", true, "data", savedSections));
-        } catch (IOException e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Upload failed", "error", e.getMessage()));
-        }
-    }
-    
-
-    // -------------------- UPDATE --------------------
-    @PutMapping("/{id}")
-    public HomeSection updateHomeSection(
-            @PathVariable Long id,
-            @RequestParam(required = false) String title,
-            @RequestParam(required = false) String description,
-            @RequestParam(required = false) String route,
-            @RequestParam(required = false) MultipartFile file) throws IOException {
-        return service.updateHomeSection(id, title, description, file, route);
-    }
-    // -------------------- DELETE --------------------
-
-    @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteSection(@PathVariable Long id) {
-        service.delete(id);
-        return ResponseEntity.ok(Map.of("message", "Section deleted successfully"));
-    }
-
-    // -------------------- HELPER --------------------
-
-    private ResponseEntity<?> handleSectionAdd(String title, String description, String route, String type, MultipartFile image) {
-        try {
-            File uploadDir = new File(UPLOAD_DIR);
-            if (!uploadDir.exists()) uploadDir.mkdirs();
-
-            HomeSection.SectionType sectionType;
-            try {
-                sectionType = HomeSection.SectionType.valueOf(type.toUpperCase());
-            } catch (IllegalArgumentException ex) {
-                return ResponseEntity.badRequest().body(Map.of("message", "Invalid section type: " + type));
-            }
-
-            String imageUrl = null;
-            if (image != null && !image.isEmpty()) {
-                String fileName = System.currentTimeMillis() + "_" + image.getOriginalFilename().replaceAll("\\s+", "_");
-                File dest = new File(uploadDir, fileName);
-                image.transferTo(dest);
-                imageUrl = "/uploads/home-sections/" + fileName;
-            }
-
-            HomeSection section = new HomeSection();
-            section.setTitle(title);
-            section.setDescription(description);
-            section.setRoute(route);
-            section.setType(sectionType);
-            section.setImageUrl(imageUrl);
-            section.setActive(true);
-
-            HomeSection saved = service.save(section);
-            return ResponseEntity.ok(Map.of("success", true, "data", saved));
-        } catch (IOException e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Upload failed", "error", e.getMessage()));
-        }
-    }
- // ------------------ FAQ Endpoints ------------------
-  //✅ FAQ endpoints
-  @GetMapping("/faqs")
-  public ResponseEntity<List<HomeSection>> getAllFaqs() {
-   return ResponseEntity.ok(service.getByType(HomeSection.SectionType.FAQ));
   }
-
-  @PostMapping("/faqs")
-  public ResponseEntity<?> addFaq(@RequestBody HomeSection faq) {
-   faq.setType(HomeSection.SectionType.FAQ);
-   faq.setActive(true);
-   HomeSection saved = service.save(faq);
-   return ResponseEntity.ok(saved);
-  }
-
-  @PutMapping("/faqs/{id}")
-  public ResponseEntity<?> updateFaq(@PathVariable Long id, @RequestBody HomeSection faq) {
-   Optional<HomeSection> existingOpt = service.getById(id);
-   if (existingOpt.isEmpty())
-       return ResponseEntity.status(HttpStatus.NOT_FOUND).body("FAQ not found");
-
-   HomeSection existing = existingOpt.get();
-   existing.setTitle(faq.getTitle());
-   existing.setDescription(faq.getDescription());
-   existing.setType(HomeSection.SectionType.FAQ); // ensure type stays FAQ
-   service.save(existing);
-   return ResponseEntity.ok(existing);
-  }
-
-  @DeleteMapping("/faqs/{id}")
-  public ResponseEntity<?> deleteFaq(@PathVariable Long id) {
-   service.delete(id);
-   return ResponseEntity.ok(Map.of("message", "FAQ deleted successfully"));
-  }
-
-  // ------------------ General Sections ------------------
-
-
-
-  @PostMapping("/leadership")
-  public ResponseEntity<HomeSection> addLeadership(
-          @RequestParam("title") String title,
-          @RequestParam("description") String description,
-          @RequestParam(value = "image", required = false) MultipartFile image) {
-
-      try {
-          HomeSection section = new HomeSection();
-          section.setType(HomeSection.SectionType.LEADERSHIP);
-          section.setTitle(title);
-          section.setDescription(description);
-
-          if (image != null && !image.isEmpty()) {
-              String uploadDir = "uploads/home-sections/";
-              String fileName = System.currentTimeMillis() + "_" + image.getOriginalFilename();
-              Path path = Paths.get(uploadDir, fileName);
-              Files.createDirectories(path.getParent());
-              Files.write(path, image.getBytes());
-
-              // store relative URL path (so it can be served later)
-              section.setImageUrl("/uploads/home-sections/" + fileName);
-          }
-
-          return ResponseEntity.ok(homeSectionRepository.save(section));
-      } catch (Exception e) {
-          e.printStackTrace();
-          return ResponseEntity.internalServerError().build();
-      }
-  }
-
-
-  @GetMapping("/leadership")
-  public ResponseEntity<List<HomeSection>> getLeadership() {
-      List<HomeSection> leadershipSections = homeSectionRepository.findByType(HomeSection.SectionType.LEADERSHIP);
-      return ResponseEntity.ok(leadershipSections);
-  }
-
-
-
-  //Update Leadership
-  @PutMapping(value = "/leadership/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public ResponseEntity<?> updateLeadership(
-       @PathVariable Long id,
-       @RequestPart("title") String title,
-       @RequestPart(value = "description", required = false) String description,
-       @RequestPart(value = "route", required = false) String route,
-       @RequestPart(value = "image", required = false) MultipartFile image
-  ) {
-   Optional<HomeSection> existingOpt = service.getById(id);
-   if (existingOpt.isEmpty()) return ResponseEntity.status(HttpStatus.NOT_FOUND)
-           .body(Map.of("message", "Leadership not found"));
-
-   try {
-       HomeSection section = existingOpt.get();
-       section.setTitle(title);
-       section.setDescription(description);
-       section.setRoute(route);
-
-       if (image != null && !image.isEmpty()) {
-           File uploadDir = new File(UPLOAD_DIR);
-           if (!uploadDir.exists()) uploadDir.mkdirs();
-
-           String fileName = System.currentTimeMillis() + "_" + image.getOriginalFilename();
-           File dest = new File(uploadDir, fileName);
-           image.transferTo(dest);
-           section.setImageUrl("/uploads/home-sections/" + fileName);
-       }
-
-       HomeSection saved = service.save(section);
-       return ResponseEntity.ok(Map.of("success", true, "data", saved));
-   } catch (Exception e) {
-       e.printStackTrace();
-       return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-               .body(Map.of("message", "Update failed", "error", e.getMessage()));
-   }
-  }
-
-  //Delete Leadership
-  @DeleteMapping("/leadership/{id}")
-  public ResponseEntity<?> deleteLeadership(@PathVariable Long id) {
-   service.delete(id);
-   return ResponseEntity.ok(Map.of("message", "Leadership deleted successfully"));
-  }
-
-  
-  @PostMapping("/banner")
-  public ResponseEntity<?> addBanner(
-          @RequestParam String title,
-          @RequestParam String description,
-          @RequestParam(required = false) String route,
-          @RequestParam MultipartFile file
-  ) throws IOException {
-
-      String uploadDir = "uploads/home-sections/";
-      String fileName = System.currentTimeMillis() + "_" + file.getOriginalFilename();
-      Path path = Paths.get(uploadDir, fileName);
-      Files.createDirectories(path.getParent());
-      Files.write(path, file.getBytes());
-
-      HomeSection banner = new HomeSection();
-      banner.setTitle(title);
-      banner.setDescription(description);
-      banner.setRoute(route);
-      banner.setActive(true);
-      banner.setImageUrl("/" + uploadDir + fileName);
-      banner.setType(HomeSection.SectionType.BANNER); // Important
-
-      return ResponseEntity.ok(homeSectionRepository.save(banner));
-  }
-
-  @GetMapping("/banner")
-  public List<HomeSection> getBanners() {
-      return service.getBanners();
-  }
-
-  
 }
